@@ -1,0 +1,14 @@
+[Unit]
+Description=RAID Management WebUI
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/bizon/raid-webui
+ExecStart=/usr/bin/python3 /home/bizon/raid-webui/app.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
