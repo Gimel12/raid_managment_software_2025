@@ -96,6 +96,7 @@ def parse_virtual_drives():
     """Get list of virtual drives (RAID arrays)"""
     output = run_storcli("/c0/vall show")
     vdrives = []
+    mount_info = get_mount_info()
     
     in_vd_section = False
     for line in output.split('\n'):
@@ -120,6 +121,10 @@ def parse_virtual_drives():
                         os_device = detail_line.split('=')[-1].strip()
                         break
                 
+                # Check mount status and filesystem
+                mount_point = mount_info.get(os_device, "")
+                filesystem = check_filesystem(os_device) if os_device else None
+                
                 vdrives.append({
                     "dg_vd": parts[0],
                     "type": parts[1],
@@ -127,6 +132,9 @@ def parse_virtual_drives():
                     "access": parts[3],
                     "size": parts[8] + " " + parts[9] if len(parts) > 9 else parts[8],
                     "device": os_device if os_device else "N/A",
+                    "mount_point": mount_point,
+                    "filesystem": filesystem,
+                    "mounted": bool(mount_point),
                     "name": " ".join(parts[10:]).strip() if len(parts) > 10 else ""
                 })
     
@@ -305,6 +313,96 @@ def run_speed_test(device, test_type="quick"):
     
     return results
 
+def get_mount_info():
+    """Get mount information for all devices"""
+    mount_info = {}
+    
+    # Get all mounted filesystems
+    try:
+        result = subprocess.run("mount | grep '^/dev/'", shell=True, capture_output=True, text=True)
+        for line in result.stdout.split('\n'):
+            if line.strip():
+                parts = line.split()
+                if len(parts) >= 3:
+                    device = parts[0]
+                    mount_point = parts[2]
+                    mount_info[device] = mount_point
+    except:
+        pass
+    
+    return mount_info
+
+def check_filesystem(device):
+    """Check if device has a filesystem"""
+    try:
+        result = subprocess.run(f"sudo blkid {device}", shell=True, capture_output=True, text=True)
+        if "TYPE=" in result.stdout:
+            # Extract filesystem type
+            for part in result.stdout.split():
+                if part.startswith("TYPE="):
+                    return part.split("=")[1].strip('"')
+        return None
+    except:
+        return None
+
+def mount_device(device, mount_point, filesystem=None):
+    """Mount a device to a mount point"""
+    try:
+        # Check if filesystem exists
+        if not filesystem:
+            filesystem = check_filesystem(device)
+        
+        if not filesystem:
+            return {"success": False, "error": "No filesystem found. Please format the device first."}
+        
+        # Create mount point if it doesn't exist
+        subprocess.run(f"sudo mkdir -p {mount_point}", shell=True, check=True)
+        
+        # Mount the device
+        result = subprocess.run(f"sudo mount {device} {mount_point}", shell=True, capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            return {"success": True, "message": f"Successfully mounted {device} to {mount_point}"}
+        else:
+            return {"success": False, "error": result.stderr}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+def unmount_device(device):
+    """Unmount a device"""
+    try:
+        result = subprocess.run(f"sudo umount {device}", shell=True, capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            return {"success": True, "message": f"Successfully unmounted {device}"}
+        else:
+            return {"success": False, "error": result.stderr}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+def format_device(device, filesystem="ext4"):
+    """Format a device with specified filesystem"""
+    try:
+        # Unmount if mounted
+        subprocess.run(f"sudo umount {device}", shell=True, capture_output=True)
+        
+        # Format the device
+        if filesystem == "ext4":
+            cmd = f"sudo mkfs.ext4 -F {device}"
+        elif filesystem == "xfs":
+            cmd = f"sudo mkfs.xfs -f {device}"
+        else:
+            return {"success": False, "error": f"Unsupported filesystem: {filesystem}"}
+        
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=300)
+        
+        if result.returncode == 0:
+            return {"success": True, "message": f"Successfully formatted {device} as {filesystem}"}
+        else:
+            return {"success": False, "error": result.stderr}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 @app.route('/api/raid_types')
 def get_raid_types():
     """Get supported RAID types"""
@@ -331,6 +429,44 @@ def speed_test():
     
     results = run_speed_test(device, test_type)
     return jsonify(results)
+
+@app.route('/api/mount', methods=['POST'])
+def api_mount():
+    """API endpoint to mount a device"""
+    data = request.json
+    device = data.get('device')
+    mount_point = data.get('mount_point')
+    
+    if not device or not mount_point:
+        return jsonify({"success": False, "error": "Device and mount point are required"})
+    
+    result = mount_device(device, mount_point)
+    return jsonify(result)
+
+@app.route('/api/unmount', methods=['POST'])
+def api_unmount():
+    """API endpoint to unmount a device"""
+    data = request.json
+    device = data.get('device')
+    
+    if not device:
+        return jsonify({"success": False, "error": "Device is required"})
+    
+    result = unmount_device(device)
+    return jsonify(result)
+
+@app.route('/api/format', methods=['POST'])
+def api_format():
+    """API endpoint to format a device"""
+    data = request.json
+    device = data.get('device')
+    filesystem = data.get('filesystem', 'ext4')
+    
+    if not device:
+        return jsonify({"success": False, "error": "Device is required"})
+    
+    result = format_device(device, filesystem)
+    return jsonify(result)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)

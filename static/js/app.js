@@ -75,21 +75,44 @@ function loadVirtualDrives() {
                 return;
             }
             
-            tbody.innerHTML = data.map(vd => `
-                <tr>
-                    <td>${vd.dg_vd}</td>
-                    <td><span class="badge bg-primary">${vd.type}</span></td>
-                    <td><span class="badge ${getStateBadgeClass(vd.state)}">${vd.state}</span></td>
-                    <td>${vd.access}</td>
-                    <td>${vd.size}</td>
-                    <td><code>${vd.device || 'N/A'}</code></td>
-                    <td>
-                        <button class="btn btn-danger btn-sm" onclick="showDeleteModal('${vd.dg_vd}')">
-                            <i class="bi bi-trash"></i> Delete
-                        </button>
-                    </td>
-                </tr>
-            `).join('');
+            tbody.innerHTML = data.map(vd => {
+                const mountStatus = vd.mounted ? 
+                    `<span class="badge bg-success"><i class="bi bi-check-circle"></i> ${vd.mount_point}</span>` :
+                    `<span class="badge bg-secondary"><i class="bi bi-x-circle"></i> Not mounted</span>`;
+                
+                const filesystemStatus = vd.filesystem ? 
+                    `<small class="text-muted d-block">${vd.filesystem}</small>` : 
+                    `<small class="text-warning d-block">No filesystem</small>`;
+                
+                const mountButton = vd.mounted ?
+                    `<button class="btn btn-warning btn-sm" onclick="unmountDevice('${vd.device}')">
+                        <i class="bi bi-eject"></i> Unmount
+                    </button>` :
+                    (vd.filesystem ?
+                    `<button class="btn btn-success btn-sm" onclick="showMountModal('${vd.device}', '${vd.type}')">
+                        <i class="bi bi-hdd-network"></i> Mount
+                    </button>` :
+                    `<button class="btn btn-info btn-sm" onclick="showFormatModal('${vd.device}')">
+                        <i class="bi bi-disc"></i> Format
+                    </button>`);
+                
+                return `
+                    <tr>
+                        <td>${vd.dg_vd}</td>
+                        <td><span class="badge bg-primary">${vd.type}</span></td>
+                        <td><span class="badge ${getStateBadgeClass(vd.state)}">${vd.state}</span></td>
+                        <td>${vd.size}</td>
+                        <td><code>${vd.device || 'N/A'}</code></td>
+                        <td>${mountStatus}${filesystemStatus}</td>
+                        <td>
+                            ${mountButton}
+                            <button class="btn btn-danger btn-sm ms-1" onclick="showDeleteModal('${vd.dg_vd}')">
+                                <i class="bi bi-trash"></i> Delete
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
         })
         .catch(error => console.error('Error loading virtual drives:', error));
 }
@@ -321,6 +344,85 @@ function runSpeedTest() {
         btn.disabled = false;
         btn.innerHTML = originalText;
     });
+}
+
+function showMountModal(device, raidType) {
+    const mountPoint = `/mnt/${raidType.toLowerCase()}`;
+    const confirmed = confirm(`Mount ${device} to ${mountPoint}?\n\nThis will make the RAID array accessible for use.`);
+    
+    if (confirmed) {
+        fetch('/api/mount', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                device: device,
+                mount_point: mountPoint
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                alert(`Success! ${data.message}`);
+                refreshAll();
+            } else {
+                alert(`Failed to mount: ${data.error}`);
+            }
+        })
+        .catch(error => alert('Error mounting device: ' + error));
+    }
+}
+
+function unmountDevice(device) {
+    const confirmed = confirm(`Unmount ${device}?\n\nMake sure no applications are using this device.`);
+    
+    if (confirmed) {
+        fetch('/api/unmount', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({device: device})
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                alert(`Success! ${data.message}`);
+                refreshAll();
+            } else {
+                alert(`Failed to unmount: ${data.error}`);
+            }
+        })
+        .catch(error => alert('Error unmounting device: ' + error));
+    }
+}
+
+function showFormatModal(device) {
+    const filesystem = prompt(`Format ${device}?\n\nEnter filesystem type (ext4 or xfs):`, 'ext4');
+    
+    if (filesystem && (filesystem === 'ext4' || filesystem === 'xfs')) {
+        const confirmed = confirm(`⚠️ WARNING ⚠️\n\nThis will DESTROY ALL DATA on ${device}!\n\nAre you absolutely sure you want to format this device as ${filesystem}?`);
+        
+        if (confirmed) {
+            fetch('/api/format', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    device: device,
+                    filesystem: filesystem
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert(`Success! ${data.message}\n\nYou can now mount the device.`);
+                    refreshAll();
+                } else {
+                    alert(`Failed to format: ${data.error}`);
+                }
+            })
+            .catch(error => alert('Error formatting device: ' + error));
+        }
+    } else if (filesystem) {
+        alert('Invalid filesystem. Please use ext4 or xfs.');
+    }
 }
 
 // Modal event listeners
