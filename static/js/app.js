@@ -120,7 +120,7 @@ function updateDriveSelection() {
     
     document.getElementById('raid-type-help').textContent = `Minimum ${raidType.min_drives} drives required`;
     
-    const availableDrives = physicalDrives.filter(d => d.state === 'UGood');
+    const availableDrives = physicalDrives.filter(d => d.state === 'Unconfigured Good' || d.state === 'UGood');
     
     if (availableDrives.length === 0) {
         document.getElementById('drive-selection').innerHTML = '<p class="text-warning">No unconfigured drives available</p>';
