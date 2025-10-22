@@ -17,20 +17,58 @@ A simple, clean web interface for managing MegaRAID controllers using StorCLI.
 
 ## Access
 
-**WebUI URL:** `http://192.168.1.220:5000/`
+WebUI URL: `http://192.168.1.220:5000/`
 
 Access from any computer on your network using the URL above.
 
 ## Quick Start
 
-### Manual Start
+### Option 1: Run as Service (Recommended - Auto-starts on boot)
+```bash
+# Install and enable the service
+sudo cp raid-webui.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable raid-webui
+sudo systemctl start raid-webui
+
+# Check status
+sudo systemctl status raid-webui
+```
+
+### Option 2: Run Manually
 ```bash
 cd /home/bizon/raid-webui
 python3 app.py
 ```
 
-### Stop the Server
-Press `Ctrl+C` in the terminal where it's running
+The WebUI will be available at `http://192.168.1.220:5000/`
+
+## Service Management
+
+**Check service status:**
+```bash
+sudo systemctl status raid-webui
+```
+
+**View live logs:**
+```bash
+sudo journalctl -u raid-webui -f
+```
+
+**Restart service:**
+```bash
+sudo systemctl restart raid-webui
+```
+
+**Stop service:**
+```bash
+sudo systemctl stop raid-webui
+```
+
+**Disable auto-start:**
+```bash
+sudo systemctl disable raid-webui
+```
 
 ## Auto-Start on Boot
 
