@@ -6,6 +6,7 @@ __pycache__/
 .Python
 env/
 venv/
+.venv/
 *.egg-info/
 
 # Flask
@@ -25,6 +26,10 @@ Thumbs.db
 # Logs
 *.log
 nohup.out
+
+# StorCLI logs
+storcli.log
+storcli.log.*
 
 # Temporary files
 tmp/

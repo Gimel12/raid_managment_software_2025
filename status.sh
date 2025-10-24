@@ -1,4 +1,4 @@
-#\!/bin/bash
+#!/bin/bash
 echo "=== RAID WebUI Status ==="
 echo ""
 if pgrep -f "python3 app.py" > /dev/null; then
@@ -10,7 +10,7 @@ if pgrep -f "python3 app.py" > /dev/null; then
 else
     echo "❌ WebUI is NOT running"
     echo ""
-    echo "Start with: cd /home/bizon/raid-webui && python3 app.py"
+    echo "Start with: cd /home/bizon/raid_managment_software_2025 && python3 app.py"
 fi
 echo ""
 echo "Port status:"

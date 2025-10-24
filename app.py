@@ -140,6 +140,41 @@ def parse_virtual_drives():
     
     return vdrives
 
+def list_block_devices():
+    """List top-level block devices (e.g., /dev/sd*, /dev/nvme*n1)."""
+    devices = []
+    try:
+        # List block devices of type 'disk' only, names only
+        result = subprocess.run("lsblk -ndo NAME,TYPE", shell=True, capture_output=True, text=True)
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[1] == 'disk':
+                name = parts[0].strip()
+                if name:
+                    devices.append(f"/dev/{name}")
+    except Exception:
+        pass
+    return devices
+
+@app.route('/api/test_devices')
+def get_test_devices():
+    """Return list of devices available for performance testing."""
+    devices = set()
+    # Add VD OS devices from storcli parsing
+    try:
+        for vd in parse_virtual_drives():
+            dev = vd.get('device')
+            if dev and dev != 'N/A':
+                devices.add(dev)
+    except Exception:
+        pass
+    # Add system block devices
+    for dev in list_block_devices():
+        devices.add(dev)
+    # Sort for stable UI
+    device_list = sorted(devices)
+    return jsonify(device_list)
+
 @app.route('/')
 def index():
     """Main page"""

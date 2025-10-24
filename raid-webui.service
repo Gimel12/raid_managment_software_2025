@@ -5,8 +5,9 @@ After=network.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/home/bizon/raid-webui
-ExecStart=/usr/bin/python3 /home/bizon/raid-webui/app.py
+WorkingDirectory=/home/bizon/raid_managment_software_2025
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/bizon/raid_managment_software_2025/.venv/bin/python /home/bizon/raid_managment_software_2025/app.py
 Restart=always
 RestartSec=10
 

@@ -10,6 +10,7 @@ document.addEventListener('DOMContentLoaded', function() {
     loadPhysicalDrives();
     loadVirtualDrives();
     loadRaidTypes();
+    loadTestDevices();
     
     // Refresh every 30 seconds
     setInterval(refreshAll, 30000);
@@ -19,6 +20,7 @@ function refreshAll() {
     loadControllerInfo();
     loadPhysicalDrives();
     loadVirtualDrives();
+    loadTestDevices();
 }
 
 function loadControllerInfo() {
@@ -113,8 +115,30 @@ function loadVirtualDrives() {
                     </tr>
                 `;
             }).join('');
+            // Refresh test devices after vdrives update
+            loadTestDevices();
         })
         .catch(error => console.error('Error loading virtual drives:', error));
+}
+
+function loadTestDevices() {
+    const select = document.getElementById('test-device');
+    if (!select) return;
+    // Show loading placeholder
+    select.innerHTML = '<option value="" disabled selected>Loading devices...</option>';
+    fetch('/api/test_devices')
+        .then(response => response.json())
+        .then(devices => {
+            if (!Array.isArray(devices) || devices.length === 0) {
+                select.innerHTML = '<option value="" disabled selected>No devices found</option>';
+                return;
+            }
+            select.innerHTML = devices.map(d => `<option value="${d}">${d}</option>`).join('');
+        })
+        .catch(err => {
+            console.error('Error loading test devices:', err);
+            select.innerHTML = '<option value="" disabled selected>Error loading devices</option>';
+        });
 }
 
 function loadRaidTypes() {
@@ -304,6 +328,11 @@ function runSpeedTest() {
     const testType = document.getElementById('test-type').value;
     const resultsDiv = document.getElementById('speed-test-results');
     const btn = event.target;
+
+    if (!device) {
+        alert('Please select a device to test.');
+        return;
+    }
     
     // Show results div and reset
     resultsDiv.style.display = 'block';
