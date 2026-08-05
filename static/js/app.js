@@ -1,461 +1,578 @@
-// RAID Management WebUI - Frontend JavaScript
+'use strict';
 
-let raidTypes = [];
-let physicalDrives = [];
-let deleteVdId = null;
+const state = {
+  data: { disks: [], arrays: [], levels: {}, filesystems: {} },
+  wizard: { step: 1, level: null, devices: [] },
+  filter: 'all',
+  mountTarget: null,
+  deleteTarget: null,
+  loading: false,
+};
 
-// Initialize on page load
-document.addEventListener('DOMContentLoaded', function() {
-    loadControllerInfo();
-    loadPhysicalDrives();
-    loadVirtualDrives();
-    loadRaidTypes();
-    loadTestDevices();
-    
-    // Refresh every 30 seconds
-    setInterval(refreshAll, 30000);
-});
+const $ = (selector, root = document) => root.querySelector(selector);
+const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
-function refreshAll() {
-    loadControllerInfo();
-    loadPhysicalDrives();
-    loadVirtualDrives();
-    loadTestDevices();
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>'"]/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;',
+  })[character]);
 }
 
-function loadControllerInfo() {
-    fetch('/api/controller')
-        .then(response => response.json())
-        .then(data => {
-            document.getElementById('ctrl-model').textContent = data.model;
-            document.getElementById('ctrl-serial').textContent = data.serial;
-            document.getElementById('ctrl-firmware').textContent = data.firmware;
-            
-            const statusBadge = document.getElementById('ctrl-status');
-            statusBadge.textContent = data.status;
-            statusBadge.className = data.status === 'Online' ? 'badge bg-success' : 'badge bg-danger';
-        })
-        .catch(error => console.error('Error loading controller info:', error));
+function titleCase(value) {
+  return String(value || '').replace(/[-_]/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function loadPhysicalDrives() {
-    fetch('/api/drives')
-        .then(response => response.json())
-        .then(data => {
-            physicalDrives = data;
-            const tbody = document.getElementById('drives-table');
-            
-            if (data.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="8" class="text-center">No physical drives found</td></tr>';
-                return;
-            }
-            
-            tbody.innerHTML = data.map(drive => `
-                <tr>
-                    <td>${drive.slot}</td>
-                    <td>${drive.did}</td>
-                    <td><span class="badge ${getStateBadgeClass(drive.state)}">${drive.state}</span></td>
-                    <td>${drive.dg}</td>
-                    <td>${drive.size}</td>
-                    <td>${drive.interface}</td>
-                    <td>${drive.media}</td>
-                    <td>${drive.model}</td>
-                </tr>
-            `).join('');
-        })
-        .catch(error => console.error('Error loading drives:', error));
+function formatNumber(value) {
+  if (value === null || value === undefined) return '—';
+  return Number(value).toLocaleString();
 }
 
-function loadVirtualDrives() {
-    fetch('/api/vdrives')
-        .then(response => response.json())
-        .then(data => {
-            const tbody = document.getElementById('vdrives-table');
-            
-            if (data.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">No RAID arrays configured</td></tr>';
-                return;
-            }
-            
-            tbody.innerHTML = data.map(vd => {
-                const mountStatus = vd.mounted ? 
-                    `<span class="badge bg-success"><i class="bi bi-check-circle"></i> ${vd.mount_point}</span>` :
-                    `<span class="badge bg-secondary"><i class="bi bi-x-circle"></i> Not mounted</span>`;
-                
-                const filesystemStatus = vd.filesystem ? 
-                    `<small class="text-muted d-block">${vd.filesystem}</small>` : 
-                    `<small class="text-warning d-block">No filesystem</small>`;
-                
-                const mountButton = vd.mounted ?
-                    `<button class="btn btn-warning btn-sm" onclick="unmountDevice('${vd.device}')">
-                        <i class="bi bi-eject"></i> Unmount
-                    </button>` :
-                    (vd.filesystem ?
-                    `<button class="btn btn-success btn-sm" onclick="showMountModal('${vd.device}', '${vd.type}')">
-                        <i class="bi bi-hdd-network"></i> Mount
-                    </button>` :
-                    `<button class="btn btn-info btn-sm" onclick="showFormatModal('${vd.device}')">
-                        <i class="bi bi-disc"></i> Format
-                    </button>`);
-                
-                return `
-                    <tr>
-                        <td>${vd.dg_vd}</td>
-                        <td><span class="badge bg-primary">${vd.type}</span></td>
-                        <td><span class="badge ${getStateBadgeClass(vd.state)}">${vd.state}</span></td>
-                        <td>${vd.size}</td>
-                        <td><code>${vd.device || 'N/A'}</code></td>
-                        <td>${mountStatus}${filesystemStatus}</td>
-                        <td>
-                            ${mountButton}
-                            <button class="btn btn-danger btn-sm ms-1" onclick="showDeleteModal('${vd.dg_vd}')">
-                                <i class="bi bi-trash"></i> Delete
-                            </button>
-                        </td>
-                    </tr>
-                `;
-            }).join('');
-            // Refresh test devices after vdrives update
-            loadTestDevices();
-        })
-        .catch(error => console.error('Error loading virtual drives:', error));
+function formatHours(value) {
+  if (value === null || value === undefined) return '—';
+  if (value < 24) return `${formatNumber(value)} hours`;
+  return `${formatNumber(Math.round(value / 24))} days`;
 }
 
-function loadTestDevices() {
-    const select = document.getElementById('test-device');
-    if (!select) return;
-    // Show loading placeholder
-    select.innerHTML = '<option value="" disabled selected>Loading devices...</option>';
-    fetch('/api/test_devices')
-        .then(response => response.json())
-        .then(devices => {
-            if (!Array.isArray(devices) || devices.length === 0) {
-                select.innerHTML = '<option value="" disabled selected>No devices found</option>';
-                return;
-            }
-            select.innerHTML = devices.map(d => `<option value="${d}">${d}</option>`).join('');
-        })
-        .catch(err => {
-            console.error('Error loading test devices:', err);
-            select.innerHTML = '<option value="" disabled selected>Error loading devices</option>';
-        });
+function toast(title, message = '', kind = 'success') {
+  const node = document.createElement('div');
+  node.className = `toast ${kind}`;
+  node.innerHTML = `
+    <span class="toast-icon">${kind === 'error' ? '!' : '✓'}</span>
+    <div><strong>${escapeHtml(title)}</strong>${message ? `<p>${escapeHtml(message)}</p>` : ''}</div>`;
+  $('#toast-region').appendChild(node);
+  window.setTimeout(() => {
+    node.style.opacity = '0';
+    node.style.transform = 'translateX(12px)';
+    window.setTimeout(() => node.remove(), 220);
+  }, 4600);
 }
 
-function loadRaidTypes() {
-    fetch('/api/raid_types')
-        .then(response => response.json())
-        .then(data => {
-            raidTypes = data;
-            const select = document.getElementById('raid-type');
-            select.innerHTML = '<option value="">Select RAID type...</option>' +
-                data.map(type => `<option value="${type.value}">${type.name}</option>`).join('');
-            
-            select.addEventListener('change', updateDriveSelection);
-        })
-        .catch(error => console.error('Error loading RAID types:', error));
+async function api(url, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  if (options.method && options.method !== 'GET') headers['X-RAID-Studio'] = '1';
+  if (options.body) headers['Content-Type'] = 'application/json';
+  const response = await fetch(url, { ...options, headers });
+  let payload = {};
+  try { payload = await response.json(); } catch (_) { payload = {}; }
+  if (!response.ok) throw new Error(payload.error || `Request failed (${response.status})`);
+  return payload;
 }
 
-function updateDriveSelection() {
-    const selectedType = document.getElementById('raid-type').value;
-    const raidType = raidTypes.find(t => t.value === selectedType);
-    
-    if (!raidType) {
-        document.getElementById('drive-selection').innerHTML = '<p class="text-muted">Please select a RAID type first</p>';
-        document.getElementById('raid-type-help').textContent = '';
-        return;
-    }
-    
-    document.getElementById('raid-type-help').textContent = `Minimum ${raidType.min_drives} drives required`;
-    
-    const availableDrives = physicalDrives.filter(d => d.state === 'Unconfigured Good' || d.state === 'UGood');
-    
-    if (availableDrives.length === 0) {
-        document.getElementById('drive-selection').innerHTML = '<p class="text-warning">No unconfigured drives available</p>';
-        return;
-    }
-    
-    document.getElementById('drive-selection').innerHTML = availableDrives.map(drive => `
-        <div class="form-check">
-            <input class="form-check-input" type="checkbox" value="${drive.slot}" id="drive-${drive.slot}">
-            <label class="form-check-label" for="drive-${drive.slot}">
-                <strong>${drive.slot}</strong> - ${drive.size} ${drive.model}
-            </label>
+async function loadData({ quiet = false } = {}) {
+  if (state.loading) return;
+  state.loading = true;
+  $('#refresh-button').classList.add('loading');
+  try {
+    state.data = await api('/api/overview');
+    renderAll();
+  } catch (error) {
+    if (!quiet) toast('Could not load storage data', error.message, 'error');
+    $('#updated-at').textContent = 'Connection unavailable';
+  } finally {
+    state.loading = false;
+    $('#refresh-button').classList.remove('loading');
+  }
+}
+
+function renderAll() {
+  const data = state.data;
+  $('#side-hostname').textContent = data.hostname || 'Linux host';
+  $('#stat-arrays').textContent = data.arrays.length;
+  $('#stat-array-note').textContent = data.arrays.length
+    ? `${data.arrays.filter((array) => array.health === 'healthy').length} reporting healthy`
+    : 'Ready for your first array';
+  $('#stat-drives').textContent = data.disks.length;
+  $('#stat-drive-note').textContent = `${data.available_count} available for an array`;
+  $('#stat-capacity').textContent = data.array_capacity_h || '0 B';
+  $('#stat-raw-note').textContent = `${data.total_raw_h || '—'} raw capacity`;
+  $('#stat-health').textContent = `${data.healthy_count}/${data.disks.length}`;
+  const attention = data.disks.filter((disk) => disk.health.status === 'warning').length;
+  $('#stat-health-note').textContent = attention ? `${attention} drive${attention === 1 ? '' : 's'} need attention` : 'SMART checks look good';
+  $('#updated-at').textContent = `Updated ${new Date(data.refreshed_at * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+
+  const notice = $('#system-notice');
+  if (!data.mdadm_available) {
+    notice.textContent = 'mdadm is not installed. Install it before creating software RAID arrays.';
+    notice.classList.remove('hidden');
+  } else if (data.available_count < 2) {
+    notice.textContent = `Creating an array needs at least two completely unused drives. ${data.available_count} ${data.available_count === 1 ? 'drive is' : 'drives are'} available right now; protected system drives can never be selected.`;
+    notice.classList.remove('hidden');
+  } else {
+    notice.classList.add('hidden');
+  }
+
+  renderArrays();
+  renderDrives();
+}
+
+function displayArrayName(array) {
+  if (!array.array_name) return array.name;
+  return array.array_name.includes(':') ? array.array_name.split(':').pop() : array.array_name;
+}
+
+function renderArrays() {
+  const container = $('#arrays');
+  container.classList.remove('skeleton-grid');
+  container.innerHTML = '';
+  $('#arrays-empty').classList.toggle('hidden', state.data.arrays.length > 0);
+  if (!state.data.arrays.length) return;
+
+  state.data.arrays.forEach((array) => {
+    const memberDots = array.members.length
+      ? array.members.map((member) => `<span class="drive-dot ${escapeHtml(member.state)}" title="${escapeHtml(member.path)} · ${escapeHtml(member.state)}">▮</span>`).join('')
+      : '<span class="member-caption">No member details</span>';
+    const sync = array.sync && array.sync.percent !== null ? `
+      <div class="sync-block">
+        <div class="sync-meta"><span>${escapeHtml(titleCase(array.sync.operation))} ${Number(array.sync.percent).toFixed(1)}%</span><span>${escapeHtml(array.sync.speed || '')} · ETA ${escapeHtml(array.sync.eta || '—')}</span></div>
+        <div class="sync-track"><i style="width:${Math.max(0, Math.min(100, Number(array.sync.percent)))}%"></i></div>
+      </div>` : '';
+    const mounted = Boolean(array.mountpoint);
+    const mountButton = array.fstype ? `
+      <button class="button secondary small" type="button" data-array-action="${mounted ? 'unmount' : 'mount'}" data-array="${escapeHtml(array.name)}">
+        ${mounted ? 'Unmount' : 'Mount'}
+      </button>` : '';
+    const card = document.createElement('article');
+    card.className = `array-card ${escapeHtml(array.health)}`;
+    card.innerHTML = `
+      <div class="array-card-head">
+        <div class="array-identity">
+          <div class="array-symbol">▤</div>
+          <div class="array-title"><h3>${escapeHtml(displayArrayName(array))}</h3><p>${escapeHtml(array.dev)}</p></div>
         </div>
-    `).join('');
+        <span class="health-badge ${escapeHtml(array.health)}">${escapeHtml(array.health)}</span>
+      </div>
+      <div class="array-stats">
+        <div class="array-stat"><small>RAID level</small><strong>${escapeHtml(String(array.level).toUpperCase())}</strong></div>
+        <div class="array-stat"><small>Usable capacity</small><strong>${escapeHtml(array.size_h)}</strong></div>
+        <div class="array-stat"><small>Filesystem</small><strong>${escapeHtml(array.fstype || 'Not formatted')}</strong></div>
+      </div>
+      <div class="member-strip">
+        <div class="drive-dots">${memberDots}</div>
+        <span class="member-caption">${escapeHtml(array.active)}/${escapeHtml(array.raid_devices)} active${array.spare ? ` · ${escapeHtml(array.spare)} spare` : ''}</span>
+      </div>
+      ${sync}
+      <div class="array-footer">
+        <div class="mount-state ${mounted ? '' : 'unmounted'}"><span class="mount-dot"></span><span>${mounted ? `Mounted at ${escapeHtml(array.mountpoint)}` : array.fstype ? 'Not mounted' : 'Raw array'}</span></div>
+        <div class="array-actions">
+          ${mountButton}
+          <button class="button secondary small" type="button" data-array-action="delete" data-array="${escapeHtml(array.name)}">Delete</button>
+        </div>
+      </div>`;
+    container.appendChild(card);
+  });
 }
 
-function createRaid() {
-    const raidType = document.getElementById('raid-type').value;
-    if (!raidType) {
-        alert('Please select a RAID type');
-        return;
-    }
-    
-    const selectedDrives = Array.from(document.querySelectorAll('#drive-selection input:checked'))
-        .map(cb => cb.value);
-    
-    if (selectedDrives.length === 0) {
-        alert('Please select at least one drive');
-        return;
-    }
-    
-    const raidTypeInfo = raidTypes.find(t => t.value === raidType);
-    if (selectedDrives.length < raidTypeInfo.min_drives) {
-        alert(`${raidType.toUpperCase()} requires at least ${raidTypeInfo.min_drives} drives`);
-        return;
-    }
-    
-    if (!confirm(`Create ${raidType.toUpperCase()} array with ${selectedDrives.length} drives?`)) {
-        return;
-    }
-    
-    // Show loading
-    const btn = event.target;
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Creating...';
-    
-    fetch('/api/create_raid', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-            type: raidType,
-            drives: selectedDrives
-        })
-    })
-    .then(response => response.json())
-    .then(data => {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="bi bi-check-circle"></i> Create RAID';
-        
-        if (data.success) {
-            alert('RAID array created successfully!');
-            bootstrap.Modal.getInstance(document.getElementById('createRaidModal')).hide();
-            refreshAll();
-        } else {
-            alert('Failed to create RAID: ' + (data.error || data.output));
-        }
-    })
-    .catch(error => {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="bi bi-check-circle"></i> Create RAID';
-        alert('Error creating RAID: ' + error);
-    });
+function filteredDisks() {
+  if (state.filter === 'available') return state.data.disks.filter((disk) => disk.available);
+  if (state.filter === 'attention') return state.data.disks.filter((disk) => disk.health.status === 'warning' || disk.health.status === 'unknown');
+  return state.data.disks;
 }
 
-function showDeleteModal(vdId) {
-    deleteVdId = vdId;
-    document.getElementById('delete-vd-id').textContent = vdId;
-    new bootstrap.Modal(document.getElementById('deleteRaidModal')).show();
+function driveType(disk) {
+  return [disk.tran, disk.ssd ? 'SSD' : 'HDD'].filter(Boolean).join(' · ');
 }
 
-function confirmDelete() {
-    if (!deleteVdId) return;
-    
-    const btn = event.target;
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Deleting...';
-    
-    fetch('/api/delete_raid', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({vd_id: deleteVdId})
-    })
-    .then(response => response.json())
-    .then(data => {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="bi bi-trash"></i> Delete RAID';
-        
-        if (data.success) {
-            alert('RAID array deleted successfully');
-            bootstrap.Modal.getInstance(document.getElementById('deleteRaidModal')).hide();
-            refreshAll();
-        } else {
-            alert('Failed to delete RAID: ' + (data.error || data.output));
-        }
-    })
-    .catch(error => {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="bi bi-trash"></i> Delete RAID';
-        alert('Error deleting RAID: ' + error);
-    });
+function renderDrives() {
+  const container = $('#drives');
+  container.classList.remove('skeleton-list');
+  container.innerHTML = '';
+  const disks = filteredDisks();
+  if (!disks.length) {
+    container.innerHTML = '<div class="empty-state"><h3>No drives match this filter</h3><p>Choose another filter to see the rest of the machine’s storage.</p></div>';
+    return;
+  }
+  disks.forEach((disk) => {
+    const health = disk.health || {};
+    const item = document.createElement('article');
+    item.className = 'drive-item';
+    item.dataset.path = disk.path;
+    item.innerHTML = `
+      <div class="drive-row-main">
+        <div class="drive-identity"><span class="disk-symbol"></span><div><strong>${escapeHtml(disk.model)}</strong><small>${escapeHtml(disk.path)}${disk.serial ? ` · ${escapeHtml(disk.serial)}` : ''}</small></div></div>
+        <span class="cell-value">${escapeHtml(disk.size_h)}<small class="cell-sub">${escapeHtml(driveType(disk))}</small></span>
+        <span class="drive-health ${escapeHtml(health.status)}">${escapeHtml(health.label || 'Unavailable')}</span>
+        <span class="cell-value">${health.temperature !== null && health.temperature !== undefined ? `${escapeHtml(health.temperature)}°C` : '—'}<small class="cell-sub">${health.temperature >= 55 ? 'Warm' : health.temperature !== null ? 'Normal' : 'No reading'}</small></span>
+        <span><i class="usage-badge ${escapeHtml(disk.status)}">${escapeHtml(titleCase(disk.status))}</i></span>
+        <button class="expand-button" type="button" aria-label="Show details" aria-expanded="false">⌄</button>
+      </div>
+      <div class="drive-details hidden">
+        <div class="detail-item"><small>SMART status</small><strong>${escapeHtml(health.message || 'Unavailable')}</strong></div>
+        <div class="detail-item"><small>Power-on time</small><strong>${escapeHtml(formatHours(health.power_on_hours))}</strong></div>
+        <div class="detail-item"><small>Life used</small><strong>${health.life_used !== null && health.life_used !== undefined ? `${escapeHtml(health.life_used)}%` : '—'}</strong></div>
+        <div class="detail-item"><small>Media errors</small><strong>${escapeHtml(formatNumber(health.media_errors))}</strong></div>
+        <div class="detail-item"><small>Usage details</small><strong>${escapeHtml(disk.reasons.join(' · ') || 'Ready for a new array')}</strong></div>
+      </div>`;
+    container.appendChild(item);
+  });
 }
 
-function getStateBadgeClass(state) {
-    const stateUpper = state.toUpperCase();
-    if (stateUpper.includes('OPTL') || stateUpper.includes('ONLN') || stateUpper.includes('OPTIMAL') || stateUpper.includes('ONLINE')) return 'bg-success';
-    if (stateUpper.includes('UGOOD') || stateUpper.includes('UNCONFIGURED')) return 'bg-info';
-    if (stateUpper.includes('DGRD') || stateUpper.includes('PDGD')) return 'bg-warning';
-    if (stateUpper.includes('OFFLN') || stateUpper.includes('FAIL')) return 'bg-danger';
-    return 'bg-secondary';
+function openOverlay(id) {
+  $(`#${id}`).classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
 }
 
-function loadHealth() {
-    const tbody = document.getElementById('health-table');
-    tbody.innerHTML = '<tr><td colspan="6" class="text-center"><span class="spinner-border spinner-border-sm"></span> Scanning drives...</td></tr>';
-    
-    fetch('/api/health')
-        .then(response => response.json())
-        .then(data => {
-            if (data.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" class="text-center">No drive health data available</td></tr>';
-                return;
-            }
-            
-            tbody.innerHTML = data.map(drive => {
-                const statusClass = drive.overall_health === 'Good' ? 'text-success' : 'text-warning';
-                const tempClass = parseInt(drive.temperature) > 50 ? 'text-danger' : 'text-success';
-                
-                return `
-                    <tr>
-                        <td>${drive.slot}</td>
-                        <td class="${statusClass}"><strong>${drive.status}</strong></td>
-                        <td class="${tempClass}">${drive.temperature}</td>
-                        <td>${drive.power_on_hours}</td>
-                        <td>${drive.media_errors === '0' ? '<span class="text-success">0</span>' : '<span class="text-danger">' + drive.media_errors + '</span>'}</td>
-                        <td>${drive.predictive_failures === '0' ? '<span class="text-success">0</span>' : '<span class="text-danger">' + drive.predictive_failures + '</span>'}</td>
-                    </tr>
-                `;
-            }).join('');
-        })
-        .catch(error => {
-            tbody.innerHTML = '<tr><td colspan="6" class="text-center text-danger">Error loading health data</td></tr>';
-            console.error('Error loading health:', error);
-        });
+function closeOverlay(id) {
+  $(`#${id}`).classList.add('hidden');
+  if (!$$('.overlay:not(.hidden)').length) document.body.style.overflow = '';
 }
 
-function runSpeedTest() {
-    const device = document.getElementById('test-device').value;
-    const testType = document.getElementById('test-type').value;
-    const resultsDiv = document.getElementById('speed-test-results');
-    const btn = event.target;
-
-    if (!device) {
-        alert('Please select a device to test.');
-        return;
-    }
-    
-    // Show results div and reset
-    resultsDiv.style.display = 'block';
-    document.getElementById('read-speed').innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
-    document.getElementById('read-iops').innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
-    document.getElementById('write-speed').innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
-    document.getElementById('write-iops').innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
-    
-    // Disable button
-    btn.disabled = true;
-    const originalText = btn.innerHTML;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Testing...';
-    
-    fetch('/api/speed_test', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-            device: device,
-            type: testType
-        })
-    })
-    .then(response => response.json())
-    .then(data => {
-        document.getElementById('read-speed').textContent = data.read_speed;
-        document.getElementById('read-iops').textContent = data.read_iops;
-        document.getElementById('write-speed').textContent = data.write_speed;
-        document.getElementById('write-iops').textContent = data.write_iops;
-        
-        btn.disabled = false;
-        btn.innerHTML = originalText;
-        
-        if (data.status !== 'Completed') {
-            alert('Test completed with status: ' + data.status);
-        }
-    })
-    .catch(error => {
-        alert('Error running speed test: ' + error);
-        btn.disabled = false;
-        btn.innerHTML = originalText;
-    });
+function resetWizard() {
+  state.wizard = { step: 1, level: null, devices: [] };
+  $('#option-name').value = '';
+  $('#option-chunk').value = '';
+  $('#option-format').checked = true;
+  $('#option-mount').checked = true;
+  $('#option-mountpoint').value = '';
+  $('#erase-confirmation').value = '';
+  populateFilesystems();
+  renderLevels();
+  goToStep(1);
 }
 
-function showMountModal(device, raidType) {
-    const mountPoint = `/mnt/${raidType.toLowerCase()}`;
-    const confirmed = confirm(`Mount ${device} to ${mountPoint}?\n\nThis will make the RAID array accessible for use.`);
-    
-    if (confirmed) {
-        fetch('/api/mount', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                device: device,
-                mount_point: mountPoint
-            })
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                alert(`Success! ${data.message}`);
-                refreshAll();
-            } else {
-                alert(`Failed to mount: ${data.error}`);
-            }
-        })
-        .catch(error => alert('Error mounting device: ' + error));
-    }
+function openWizard() {
+  resetWizard();
+  openOverlay('wizard');
 }
 
-function unmountDevice(device) {
-    const confirmed = confirm(`Unmount ${device}?\n\nMake sure no applications are using this device.`);
-    
-    if (confirmed) {
-        fetch('/api/unmount', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({device: device})
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                alert(`Success! ${data.message}`);
-                refreshAll();
-            } else {
-                alert(`Failed to unmount: ${data.error}`);
-            }
-        })
-        .catch(error => alert('Error unmounting device: ' + error));
-    }
+function populateFilesystems() {
+  const select = $('#option-filesystem');
+  select.innerHTML = Object.entries(state.data.filesystems || {}).map(([name, details]) => (
+    `<option value="${escapeHtml(name)}">${escapeHtml(details.label)} — ${escapeHtml(details.description)}</option>`
+  )).join('');
+  if (state.data.filesystems.ext4) select.value = 'ext4';
 }
 
-function showFormatModal(device) {
-    const filesystem = prompt(`Format ${device}?\n\nEnter filesystem type (ext4 or xfs):`, 'ext4');
-    
-    if (filesystem && (filesystem === 'ext4' || filesystem === 'xfs')) {
-        const confirmed = confirm(`⚠️ WARNING ⚠️\n\nThis will DESTROY ALL DATA on ${device}!\n\nAre you absolutely sure you want to format this device as ${filesystem}?`);
-        
-        if (confirmed) {
-            fetch('/api/format', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    device: device,
-                    filesystem: filesystem
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    alert(`Success! ${data.message}\n\nYou can now mount the device.`);
-                    refreshAll();
-                } else {
-                    alert(`Failed to format: ${data.error}`);
-                }
-            })
-            .catch(error => alert('Error formatting device: ' + error));
-        }
-    } else if (filesystem) {
-        alert('Invalid filesystem. Please use ext4 or xfs.');
-    }
+function renderLevels() {
+  const container = $('#level-cards');
+  container.innerHTML = '';
+  Object.entries(state.data.levels).forEach(([key, level]) => {
+    const available = state.data.available_count >= level.min;
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = `level-card ${state.wizard.level === key ? 'selected' : ''} ${available ? '' : 'disabled'}`;
+    card.disabled = !available;
+    card.dataset.level = key;
+    card.innerHTML = `
+      <div class="level-card-head"><h4>${escapeHtml(level.name)}</h4><span class="level-tag">${escapeHtml(level.label)}</span></div>
+      <p>${escapeHtml(level.desc)}</p>
+      <div class="level-meta"><span>${escapeHtml(level.min)}+ drives</span><span>${escapeHtml(level.efficiency)}</span></div>
+      <span class="level-check">✓</span>`;
+    container.appendChild(card);
+  });
 }
 
-// Modal event listeners
-document.getElementById('createRaidModal').addEventListener('shown.bs.modal', function() {
-    loadPhysicalDrives();
-    updateDriveSelection();
+function renderDrivePicker() {
+  const level = state.data.levels[state.wizard.level];
+  const container = $('#drive-picker');
+  container.innerHTML = '';
+  state.data.disks.forEach((disk) => {
+    const selected = state.wizard.devices.includes(disk.path);
+    const row = document.createElement('label');
+    row.className = `drive-choice ${selected ? 'selected' : ''} ${disk.available ? '' : 'disabled'}`;
+    row.innerHTML = `
+      <input type="checkbox" value="${escapeHtml(disk.path)}" ${selected ? 'checked' : ''} ${disk.available ? '' : 'disabled'}>
+      <span class="disk-symbol"></span>
+      <span class="choice-copy"><strong>${escapeHtml(disk.model)}</strong><small>${escapeHtml(disk.path)}${disk.available ? ' · Healthy and unused' : ` · ${escapeHtml(disk.reasons[0] || 'In use')}`}</small></span>
+      <span class="choice-size">${escapeHtml(disk.size_h)}<small>${escapeHtml(driveType(disk))}</small></span>`;
+    container.appendChild(row);
+  });
+  const count = state.wizard.devices.length;
+  $('#drive-selection-summary').innerHTML = `<span><strong>${count}</strong> selected · ${level ? `minimum ${escapeHtml(level.min)}` : 'choose a level first'}</span><span>Estimated capacity: <strong>${escapeHtml(estimateCapacity())}</strong></span>`;
+}
+
+function estimateCapacity() {
+  const chosen = state.wizard.devices.map((path) => state.data.disks.find((disk) => disk.path === path)).filter(Boolean);
+  if (!chosen.length || !state.wizard.level) return '—';
+  const sizes = chosen.map((disk) => disk.size);
+  const smallest = Math.min(...sizes);
+  const count = chosen.length;
+  let bytes = 0;
+  if (state.wizard.level === 'raid0') bytes = sizes.reduce((sum, size) => sum + size, 0);
+  if (state.wizard.level === 'raid1') bytes = smallest;
+  if (state.wizard.level === 'raid5') bytes = smallest * Math.max(0, count - 1);
+  if (state.wizard.level === 'raid6') bytes = smallest * Math.max(0, count - 2);
+  if (state.wizard.level === 'raid10') bytes = smallest * Math.floor(count / 2);
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
+  return `${value.toFixed(1)} ${units[unit]}`;
+}
+
+function updateFormatOptions() {
+  const format = $('#option-format').checked;
+  const mount = $('#option-mount');
+  if (!format) mount.checked = false;
+  mount.disabled = !format;
+  $('#filesystem-field').classList.toggle('hidden', !format);
+  $('#mountpoint-field').classList.toggle('hidden', !mount.checked);
+  $('#chunk-field').classList.toggle('hidden', state.wizard.level === 'raid1');
+}
+
+function renderReview() {
+  const level = state.data.levels[state.wizard.level];
+  const selected = state.wizard.devices.map((path) => state.data.disks.find((disk) => disk.path === path)).filter(Boolean);
+  const filesystem = $('#option-format').checked ? $('#option-filesystem').value : 'Raw array';
+  const mountpoint = $('#option-mount').checked ? ($('#option-mountpoint').value.trim() || 'Automatic (/mnt/mdX)') : 'Not mounted';
+  $('#review-summary').innerHTML = `
+    <div class="review-hero"><div><small>Configuration</small><strong>${escapeHtml(level.name)} · ${escapeHtml(level.label)}</strong></div><div class="review-capacity"><small>Estimated usable</small><strong>${escapeHtml(estimateCapacity())}</strong></div></div>
+    <div class="review-rows">
+      <div class="review-row"><span>Physical drives</span><span>${selected.map((disk) => escapeHtml(disk.path)).join(', ')}</span></div>
+      <div class="review-row"><span>Fault tolerance</span><span>${level.redundancy ? `Up to ${escapeHtml(level.redundancy)} drive failure${level.redundancy === 1 ? '' : 's'}` : 'None'}</span></div>
+      <div class="review-row"><span>Array label</span><span>${escapeHtml($('#option-name').value.trim() || 'Automatic')}</span></div>
+      <div class="review-row"><span>Filesystem</span><span>${escapeHtml(filesystem)}</span></div>
+      <div class="review-row"><span>Mount point</span><span>${escapeHtml(mountpoint)}</span></div>
+    </div>`;
+}
+
+function goToStep(step) {
+  state.wizard.step = step;
+  $$('.wizard-page').forEach((page) => page.classList.toggle('hidden', Number(page.dataset.page) !== step));
+  $$('.stepper .step').forEach((item) => {
+    const itemStep = Number(item.dataset.step);
+    item.classList.toggle('active', itemStep === step);
+    item.classList.toggle('done', itemStep < step);
+    const bubble = $('span', item);
+    bubble.textContent = itemStep < step ? '✓' : String(itemStep);
+  });
+  $('#wizard-back').style.visibility = step === 1 ? 'hidden' : 'visible';
+  $('#wizard-next').textContent = step === 4 ? 'Create array' : 'Continue';
+  if (step === 2) renderDrivePicker();
+  if (step === 3) updateFormatOptions();
+  if (step === 4) renderReview();
+  updateWizardButton();
+  $('.drawer-body').scrollTop = 0;
+}
+
+function updateWizardButton() {
+  const next = $('#wizard-next');
+  if (state.wizard.step === 1) next.disabled = !state.wizard.level;
+  else if (state.wizard.step === 2) {
+    const level = state.data.levels[state.wizard.level];
+    next.disabled = !level || state.wizard.devices.length < level.min || (state.wizard.level === 'raid10' && state.wizard.devices.length % 2 !== 0);
+  } else if (state.wizard.step === 4) next.disabled = $('#erase-confirmation').value.trim() !== 'ERASE';
+  else next.disabled = false;
+}
+
+async function createArray() {
+  const body = {
+    level: state.wizard.level,
+    devices: state.wizard.devices,
+    name: $('#option-name').value.trim(),
+    chunk: $('#option-chunk').value || null,
+    format: $('#option-format').checked,
+    fstype: $('#option-filesystem').value,
+    mount: $('#option-mount').checked,
+    mountpoint: $('#option-mountpoint').value.trim(),
+    confirm: $('#erase-confirmation').value.trim(),
+  };
+  closeOverlay('wizard');
+  showProgress('Creating your array', 'Please keep this page open while storage is prepared.');
+  progressMessage('Validating drives and creating the mdadm array…');
+  try {
+    const result = await api('/api/create', { method: 'POST', body: JSON.stringify(body) });
+    progressMessage(`Array ${result.md} created`);
+    if (result.task) await pollTask(result.task);
+    finishProgress('Array is ready', 'Your new software RAID array was created successfully.');
+    await loadData({ quiet: true });
+  } catch (error) {
+    failProgress(error.message);
+  }
+}
+
+async function pollTask(taskId) {
+  let lastLogLength = 0;
+  while (true) {
+    await new Promise((resolve) => window.setTimeout(resolve, 1200));
+    const task = await api(`/api/task/${encodeURIComponent(taskId)}`);
+    (task.log || []).slice(lastLogLength).forEach(progressMessage);
+    lastLogLength = (task.log || []).length;
+    if (task.status === 'error') throw new Error(task.error || 'Storage preparation failed');
+    if (task.done || task.status === 'done') break;
+  }
+}
+
+function showProgress(title, subtitle) {
+  $('#progress-title').textContent = title;
+  $('#progress-subtitle').textContent = subtitle;
+  $('#progress-log').innerHTML = '';
+  $('#progress-spinner').classList.remove('hidden');
+  $('#progress-success').classList.add('hidden');
+  $('#progress-footer').classList.add('hidden');
+  openOverlay('progress-dialog');
+}
+
+function progressMessage(message) {
+  const line = document.createElement('div');
+  line.textContent = `› ${message}`;
+  $('#progress-log').appendChild(line);
+  $('#progress-log').scrollTop = $('#progress-log').scrollHeight;
+}
+
+function finishProgress(title, subtitle) {
+  $('#progress-spinner').classList.add('hidden');
+  $('#progress-success').classList.remove('hidden');
+  $('#progress-title').textContent = title;
+  $('#progress-subtitle').textContent = subtitle;
+  $('#progress-footer').classList.remove('hidden');
+}
+
+function failProgress(message) {
+  $('#progress-spinner').classList.add('hidden');
+  $('#progress-success').classList.remove('hidden');
+  $('#progress-success').textContent = '!';
+  $('#progress-success').style.color = 'var(--red)';
+  $('#progress-success').style.background = 'var(--red-soft)';
+  $('#progress-title').textContent = 'Could not complete the operation';
+  $('#progress-subtitle').textContent = message;
+  $('#progress-footer').classList.remove('hidden');
+  progressMessage(message);
+}
+
+function openMountDialog(name) {
+  state.mountTarget = name;
+  $('#mount-title').textContent = `Mount ${name}`;
+  $('#mount-dialog-path').value = `/mnt/${name}`;
+  openOverlay('mount-dialog');
+  $('#mount-dialog-path').focus();
+}
+
+async function mountArray() {
+  const name = state.mountTarget;
+  if (!name) return;
+  const mountpoint = $('#mount-dialog-path').value.trim();
+  $('#mount-confirm').disabled = true;
+  try {
+    await api(`/api/array/${encodeURIComponent(name)}/mount`, { method: 'POST', body: JSON.stringify({ mountpoint }) });
+    closeOverlay('mount-dialog');
+    toast('Array mounted', `${name} is available at ${mountpoint}`);
+    await loadData({ quiet: true });
+  } catch (error) {
+    toast('Could not mount array', error.message, 'error');
+  } finally {
+    $('#mount-confirm').disabled = false;
+  }
+}
+
+async function unmountArray(name) {
+  try {
+    await api(`/api/array/${encodeURIComponent(name)}/unmount`, { method: 'POST', body: '{}' });
+    toast('Array unmounted', `${name} was safely unmounted`);
+    await loadData({ quiet: true });
+  } catch (error) {
+    toast('Could not unmount array', error.message, 'error');
+  }
+}
+
+function openDeleteDialog(name) {
+  const array = state.data.arrays.find((item) => item.name === name);
+  state.deleteTarget = name;
+  $('#confirm-title').textContent = `Delete ${name}?`;
+  $('#confirm-content').innerHTML = `
+    <p class="confirm-copy">This will stop <strong>${escapeHtml(array?.dev || `/dev/${name}`)}</strong>, remove its automatic mount, and erase RAID metadata from every member drive. This cannot be undone.</p>
+    <label class="confirm-input-label">Type <strong>${escapeHtml(name)}</strong> to confirm<input id="delete-confirmation" placeholder="${escapeHtml(name)}" autocomplete="off" spellcheck="false"></label>`;
+  $('#confirm-action').disabled = true;
+  openOverlay('confirm-dialog');
+  $('#delete-confirmation').focus();
+}
+
+async function deleteArray() {
+  const name = state.deleteTarget;
+  const confirmation = $('#delete-confirmation').value.trim();
+  $('#confirm-action').disabled = true;
+  try {
+    await api(`/api/array/${encodeURIComponent(name)}/delete`, { method: 'POST', body: JSON.stringify({ confirm: confirmation }) });
+    closeOverlay('confirm-dialog');
+    toast('Array deleted', `${name} was removed and its drives were released`);
+    await loadData({ quiet: true });
+  } catch (error) {
+    toast('Could not delete array', error.message, 'error');
+    $('#confirm-action').disabled = confirmation !== name;
+  }
+}
+
+$('#refresh-button').addEventListener('click', () => loadData());
+['#create-array-button', '#section-create-button', '#empty-create-button'].forEach((selector) => $(selector).addEventListener('click', openWizard));
+
+$$('[data-close]').forEach((button) => button.addEventListener('click', () => closeOverlay(button.dataset.close)));
+
+$('#level-cards').addEventListener('click', (event) => {
+  const card = event.target.closest('[data-level]');
+  if (!card || card.disabled) return;
+  state.wizard.level = card.dataset.level;
+  state.wizard.devices = [];
+  renderLevels();
+  updateWizardButton();
 });
+
+$('#drive-picker').addEventListener('change', (event) => {
+  if (!event.target.matches('input[type="checkbox"]')) return;
+  const path = event.target.value;
+  if (event.target.checked) state.wizard.devices.push(path);
+  else state.wizard.devices = state.wizard.devices.filter((device) => device !== path);
+  renderDrivePicker();
+  updateWizardButton();
+});
+
+$('#wizard-back').addEventListener('click', () => {
+  if (state.wizard.step > 1) goToStep(state.wizard.step - 1);
+});
+
+$('#wizard-next').addEventListener('click', () => {
+  if (state.wizard.step === 4) createArray();
+  else goToStep(state.wizard.step + 1);
+});
+
+$('#erase-confirmation').addEventListener('input', updateWizardButton);
+$('#option-format').addEventListener('change', updateFormatOptions);
+$('#option-mount').addEventListener('change', updateFormatOptions);
+
+$('.segmented').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-filter]');
+  if (!button) return;
+  state.filter = button.dataset.filter;
+  $$('.segmented button').forEach((item) => item.classList.toggle('active', item === button));
+  renderDrives();
+});
+
+$('#drives').addEventListener('click', (event) => {
+  const button = event.target.closest('.expand-button');
+  if (!button) return;
+  const item = button.closest('.drive-item');
+  const details = $('.drive-details', item);
+  const expanded = !details.classList.contains('hidden');
+  details.classList.toggle('hidden', expanded);
+  item.classList.toggle('expanded', !expanded);
+  button.setAttribute('aria-expanded', String(!expanded));
+});
+
+$('#arrays').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-array-action]');
+  if (!button) return;
+  const name = button.dataset.array;
+  if (button.dataset.arrayAction === 'mount') openMountDialog(name);
+  if (button.dataset.arrayAction === 'unmount') unmountArray(name);
+  if (button.dataset.arrayAction === 'delete') openDeleteDialog(name);
+});
+
+$('#mount-confirm').addEventListener('click', mountArray);
+$('#confirm-action').addEventListener('click', deleteArray);
+$('#confirm-content').addEventListener('input', (event) => {
+  if (event.target.id === 'delete-confirmation') $('#confirm-action').disabled = event.target.value.trim() !== state.deleteTarget;
+});
+$('#progress-close').addEventListener('click', () => {
+  $('#progress-success').textContent = '✓';
+  $('#progress-success').removeAttribute('style');
+  closeOverlay('progress-dialog');
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape') return;
+  const active = $$('.overlay:not(.hidden)').pop();
+  if (active && active.id !== 'progress-dialog') closeOverlay(active.id);
+});
+
+loadData();
+window.setInterval(() => {
+  if (!$$('.overlay:not(.hidden)').length && document.visibilityState === 'visible') loadData({ quiet: true });
+}, 30000);
