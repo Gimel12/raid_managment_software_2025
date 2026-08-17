@@ -6,11 +6,27 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/home/bizon/raid_managment_software_2025
+Group=root
+WorkingDirectory=/opt/raid-studio
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/home/bizon/raid_managment_software_2025/.venv/bin/gunicorn --workers 1 --threads 8 --timeout 120 --bind 0.0.0.0:5000 --access-logfile - --error-logfile - app:app
+Environment=PATH=/opt/raid-studio/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+RuntimeDirectory=raid-studio
+RuntimeDirectoryMode=0700
+UMask=0077
+ExecStart=/opt/raid-studio/.venv/bin/gunicorn --workers 1 --threads 8 --timeout 120 --bind unix:/run/raid-studio/raid-studio.sock --umask 0077 --no-control-socket --access-logfile - --error-logfile - app:app
 Restart=on-failure
 RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/etc/mdadm /etc/systemd/system /var/backups/raid-studio /boot -/var/lib/initramfs-tools /mnt /srv /run/raid-studio
 
 [Install]
 WantedBy=multi-user.target

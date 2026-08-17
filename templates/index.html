@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0a0d12">
   <title>RAID Studio</title>
-  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="stylesheet" href="static/css/style.css">
 </head>
 <body>
   <div id="toast-region" class="toast-region" aria-live="polite"></div>
@@ -138,7 +138,7 @@
         <section class="wizard-page hidden" data-page="3">
           <div class="page-intro"><h3>Prepare the storage</h3><p>Name, format, and optionally mount the array as soon as it is created.</p></div>
           <div class="form-stack">
-            <label class="field"><span>Array label <small>Optional</small></span><input id="option-name" maxlength="32" placeholder="e.g. media-vault" autocomplete="off"></label>
+            <label class="field"><span>Array label <small>Optional</small></span><input id="option-name" maxlength="32" placeholder="e.g. AI data" autocomplete="off"><small class="field-help">Spaces and punctuation are safely converted to hyphens.</small></label>
             <label class="field" id="chunk-field"><span>Chunk size <small>Default is right for most uses</small></span><select id="option-chunk"><option value="">Automatic</option><option value="64">64 KB</option><option value="128">128 KB</option><option value="256">256 KB</option><option value="512">512 KB</option><option value="1024">1 MB</option></select></label>
             <div class="option-card">
               <label class="switch-row"><span><strong>Create a filesystem</strong><small>Make the array ready to store files</small></span><input type="checkbox" id="option-format" checked><i></i></label>
@@ -199,6 +199,7 @@
     </div>
   </div>
 
-  <script src="/static/js/app.js"></script>
+  <script src="../base1/cockpit.js"></script>
+  <script src="static/js/app.js"></script>
 </body>
 </html>
