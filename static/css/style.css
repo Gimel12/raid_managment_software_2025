@@ -272,6 +272,7 @@ h1 { margin-bottom: 12px; font-size: clamp(30px, 3.2vw, 45px); line-height: 1.08
 .mount-state.unmounted .mount-dot { background: var(--muted-2); }
 .mount-state span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .array-actions { display: flex; gap: 7px; }
+.system-array-badge { display: inline-flex; align-items: center; min-height: 30px; padding: 0 9px; border: 1px solid rgba(118, 146, 255, .22); border-radius: 7px; color: var(--blue-bright); background: var(--blue-soft); font-size: 8px; font-weight: 800; letter-spacing: .4px; text-transform: uppercase; }
 .more-button { width: 33px; min-height: 33px; padding: 0; letter-spacing: 2px; }
 
 .empty-state { display: grid; justify-items: center; padding: 48px 24px; border: 1px dashed #2a3546; border-radius: var(--radius-lg); background: rgba(17, 23, 32, .45); text-align: center; }

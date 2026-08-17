@@ -16,7 +16,7 @@ RAID Studio is a modern local-network web interface for Linux software RAID. It 
 
 ## Install on Ubuntu or Debian
 
-Clone the `2026` branch, enter the repository, and run:
+Clone the repository, enter it, and run:
 
 ```bash
 sudo bash install.sh
@@ -24,11 +24,16 @@ sudo bash install.sh
 
 The installer adds the required system packages, creates a Python virtual environment, installs the application dependencies, and enables the `raid-webui.service` systemd service.
 
-Open the interface at:
+Open Cockpit and choose **RAID Studio** in the sidebar:
 
 ```text
-http://SERVER_IP:5000
+https://SERVER_IP:9090/raid_studio
 ```
+
+The RAID API is not exposed on a network port. It listens on a root-only Unix
+socket and is reached through Cockpit's authenticated administrative channel.
+RAID Studio creates native systemd mount units for managed filesystems, so mounts
+are applied in Ubuntu's host namespace and enabled again automatically at boot.
 
 ## Service management
 
@@ -42,4 +47,9 @@ The service starts automatically after networking is ready and restarts after an
 
 ## Safety
 
-RAID creation and deletion permanently erase drive data. RAID Studio rechecks every selected device immediately before running destructive commands and refuses mounted, partitioned, system, or existing RAID-member drives. Always keep independent backups of important data.
+RAID creation and deletion permanently erase drive data. RAID Studio requires a
+short-lived, one-time creation plan and rechecks every selected device's identity
+immediately before running `mdadm`. It refuses mounted, partitioned, signed,
+read-only, removable, system, or existing RAID-member drives. Arrays that host
+the running operating system are visible but cannot be mounted, unmounted,
+modified, or deleted. Always keep independent backups of important data.

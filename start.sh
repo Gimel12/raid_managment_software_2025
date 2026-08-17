@@ -1,8 +1,4 @@
-#!/bin/bash
-# Startup script for RAID WebUI
-
-cd /home/bizon/raid_managment_software_2025
-if [ -f .venv/bin/activate ]; then
-    source .venv/bin/activate
-fi
-python3 app.py
+#!/usr/bin/env bash
+set -euo pipefail
+sudo systemctl start raid-webui.service
+sudo systemctl --no-pager --full status raid-webui.service

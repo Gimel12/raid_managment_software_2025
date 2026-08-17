@@ -11,6 +11,7 @@ const state = {
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+let cockpitHttp = null;
 
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>'"]/g, (character) => ({
@@ -20,6 +21,14 @@ function escapeHtml(value) {
 
 function titleCase(value) {
   return String(value || '').replace(/[-_]/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function normalizeArrayName(value) {
+  return String(value || '')
+    .trim()
+    .replace(/[^A-Za-z0-9_-]+/g, '-')
+    .replace(/^[-_]+|[-_]+$/g, '')
+    .slice(0, 32);
 }
 
 function formatNumber(value) {
@@ -51,6 +60,37 @@ async function api(url, options = {}) {
   const headers = { ...(options.headers || {}) };
   if (options.method && options.method !== 'GET') headers['X-RAID-Studio'] = '1';
   if (options.body) headers['Content-Type'] = 'application/json';
+
+  if (window.cockpit && typeof window.cockpit.http === 'function') {
+    headers['X-RAID-Studio-Envelope'] = '1';
+    cockpitHttp ||= window.cockpit.http('/run/raid-studio/raid-studio.sock', { superuser: 'require' });
+    let status = 0;
+    let responseText = '';
+    const request = cockpitHttp.request({
+      path: url,
+      method: options.method || 'GET',
+      headers,
+      body: options.body || '',
+    });
+    request.response((responseStatus) => { status = responseStatus; });
+    request.stream((chunk) => {
+      responseText += chunk;
+      return chunk.length;
+    });
+    try {
+      await request;
+    } catch (error) {
+      let payload = {};
+      try { payload = JSON.parse(responseText || '{}'); } catch (_) { payload = {}; }
+      throw new Error(payload.error || error.message || `Request failed (${status || 'connection error'})`);
+    }
+    let payload = {};
+    try { payload = JSON.parse(responseText || '{}'); } catch (_) { payload = {}; }
+    if (status >= 400) throw new Error(payload.error || `Request failed (${status})`);
+    if (payload.ok === false) throw new Error(payload.error || `Request failed (${payload.status || 'unknown error'})`);
+    return payload;
+  }
+
   const response = await fetch(url, { ...options, headers });
   let payload = {};
   try { payload = await response.json(); } catch (_) { payload = {}; }
@@ -127,10 +167,13 @@ function renderArrays() {
         <div class="sync-track"><i style="width:${Math.max(0, Math.min(100, Number(array.sync.percent)))}%"></i></div>
       </div>` : '';
     const mounted = Boolean(array.mountpoint);
-    const mountButton = array.fstype ? `
+    const mountButton = !array.protected && array.fstype ? `
       <button class="button secondary small" type="button" data-array-action="${mounted ? 'unmount' : 'mount'}" data-array="${escapeHtml(array.name)}">
         ${mounted ? 'Unmount' : 'Mount'}
       </button>` : '';
+    const arrayActions = array.protected
+      ? `<span class="system-array-badge" title="${escapeHtml(array.protection_reason || 'Protected system array')}">Protected system array</span>`
+      : `${mountButton}<button class="button secondary small" type="button" data-array-action="delete" data-array="${escapeHtml(array.name)}">Delete</button>`;
     const card = document.createElement('article');
     card.className = `array-card ${escapeHtml(array.health)}`;
     card.innerHTML = `
@@ -154,8 +197,7 @@ function renderArrays() {
       <div class="array-footer">
         <div class="mount-state ${mounted ? '' : 'unmounted'}"><span class="mount-dot"></span><span>${mounted ? `Mounted at ${escapeHtml(array.mountpoint)}` : array.fstype ? 'Not mounted' : 'Raw array'}</span></div>
         <div class="array-actions">
-          ${mountButton}
-          <button class="button secondary small" type="button" data-array-action="delete" data-array="${escapeHtml(array.name)}">Delete</button>
+          ${arrayActions}
         </div>
       </div>`;
     container.appendChild(card);
@@ -319,7 +361,7 @@ function renderReview() {
     <div class="review-rows">
       <div class="review-row"><span>Physical drives</span><span>${selected.map((disk) => escapeHtml(disk.path)).join(', ')}</span></div>
       <div class="review-row"><span>Fault tolerance</span><span>${level.redundancy ? `Up to ${escapeHtml(level.redundancy)} drive failure${level.redundancy === 1 ? '' : 's'}` : 'None'}</span></div>
-      <div class="review-row"><span>Array label</span><span>${escapeHtml($('#option-name').value.trim() || 'Automatic')}</span></div>
+      <div class="review-row"><span>Array label</span><span>${escapeHtml(normalizeArrayName($('#option-name').value) || 'Automatic')}</span></div>
       <div class="review-row"><span>Filesystem</span><span>${escapeHtml(filesystem)}</span></div>
       <div class="review-row"><span>Mount point</span><span>${escapeHtml(mountpoint)}</span></div>
     </div>`;
@@ -358,7 +400,7 @@ async function createArray() {
   const body = {
     level: state.wizard.level,
     devices: state.wizard.devices,
-    name: $('#option-name').value.trim(),
+    name: normalizeArrayName($('#option-name').value),
     chunk: $('#option-chunk').value || null,
     format: $('#option-format').checked,
     fstype: $('#option-filesystem').value,
@@ -370,8 +412,11 @@ async function createArray() {
   showProgress('Creating your array', 'Please keep this page open while storage is prepared.');
   progressMessage('Validating drives and creating the mdadm array…');
   try {
+    const plan = await api('/api/plan', { method: 'POST', body: JSON.stringify(body) });
+    body.plan = plan.plan;
     const result = await api('/api/create', { method: 'POST', body: JSON.stringify(body) });
     progressMessage(`Array ${result.md} created`);
+    if (result.warning) progressMessage(`Warning: ${result.warning}`);
     if (result.task) await pollTask(result.task);
     finishProgress('Array is ready', 'Your new software RAID array was created successfully.');
     await loadData({ quiet: true });
